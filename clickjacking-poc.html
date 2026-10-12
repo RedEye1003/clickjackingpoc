@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clickjacking PoC</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --border: #2a2f3a;
+    --text: #e6e8ec;
+    --muted: #9aa3b2;
+    --accent: #e8503a;
+    --ok: #3fb950;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 4px; font-size: 18px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .controls {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .controls input[type="url"] {
+    flex: 1 1 320px;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .controls label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .controls button {
+    padding: 10px 16px;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .controls button:hover { filter: brightness(1.1); }
+
+  .stage {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #000;
+    min-height: 500px;
+  }
+  .stage iframe {
+    width: 100%;
+    height: 600px;
+    border: 0;
+    display: block;
+  }
+  /* The attacker's decoy overlay sitting on top of the framed target */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    background:
+      repeating-linear-gradient(45deg,
+        rgba(232,80,58,0.06) 0 20px,
+        rgba(232,80,58,0.12) 20px 40px);
+  }
+  .decoy-btn {
+    pointer-events: auto;
+    padding: 14px 28px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  }
+  .overlay small {
+    background: rgba(0,0,0,.65);
+    padding: 4px 10px;
+    border-radius: 4px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .status {
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .status.vuln { border-color: var(--accent); }
+  .status.safe { border-color: var(--ok); }
+  .status b { display: block; margin-bottom: 4px; }
+
+  .meta {
+    margin-top: 24px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .meta h2 { font-size: 14px; color: var(--text); margin: 0 0 8px; }
+  .meta code { color: var(--warn); }
+  .range { display: flex; align-items: center; gap: 8px; }
+  input[type="range"] { accent-color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clickjacking Proof of Concept</h1>
+  <p>Evidence page — demonstrates whether a target can be loaded inside an iframe and overlaid with a decoy UI.</p>
+</header>
+
+<div class="wrap">
+  <div class="controls">
+    <input type="url" id="target" placeholder="https://target.example.com/sensitive-action" />
+    <label class="range">Overlay opacity
+      <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.35" />
+    </label>
+    <button id="load">Load target</button>
+  </div>
+
+  <div class="stage">
+    <iframe id="frame" title="Framed target"></iframe>
+    <div class="overlay" id="overlay">
+      <button class="decoy-btn">Click here to claim your prize</button>
+      <small>Decoy UI — the real (framed) action sits underneath</small>
+    </div>
+  </div>
+
+  <div class="status" id="status">
+    <b>Status</b>
+    Enter a target URL and click “Load target”.
+  </div>
+
+  <div class="meta">
+    <h2>How to read this evidence</h2>
+    <p>
+      If the target site renders inside the frame above, it is <b>missing framing protections</b> and is vulnerable
+      to clickjacking. The decoy button shows how an attacker overlays bait over a real control (e.g. a
+      “delete account”, “transfer”, or “authorize” button) so the victim clicks the hidden action.
+    </p>
+    <p>
+      If the frame stays blank, the browser blocked it — the site sets
+      <code>X-Frame-Options: DENY/SAMEORIGIN</code> or
+      <code>Content-Security-Policy: frame-ancestors 'none'/'self'</code>. That is the fix.
+    </p>
+    <p>
+      Verify the headers directly: <code>curl -I https://target.example.com</code> and check for
+      <code>X-Frame-Options</code> and <code>frame-ancestors</code>. Use the overlay opacity slider at
+      <b>0</b> for a clean screenshot of the decoy fully covering the target, or raise it to show alignment.
+    </p>
+  </div>
+</div>
+
+<script>
+  const frame = document.getElementById('frame');
+  const overlay = document.getElementById('overlay');
+  const target = document.getElementById('target');
+  const status = document.getElementById('status');
+  const opacity = document.getElementById('opacity');
+
+  opacity.addEventListener('input', () => { overlay.style.opacity = opacity.value; });
+  overlay.style.opacity = opacity.value;
+
+  function setStatus(kind, title, msg) {
+    status.className = 'status ' + kind;
+    status.innerHTML = '<b>' + title + '</b>' + msg;
+  }
+
+  document.getElementById('load').addEventListener('click', () => {
+    const url = target.value.trim();
+    if (!url) { setStatus('', 'Status', 'Enter a URL first.'); return; }
+
+    let loaded = false;
+    setStatus('', 'Loading…', 'Attempting to frame ' + url);
+
+    // If the frame loads, onload fires. If the browser blocks framing
+    // (X-Frame-Options / frame-ancestors), onload typically does not fire
+    // with content, so we flag likely protection after a timeout.
+    frame.onload = () => {
+      loaded = true;
+      setStatus('vuln', 'Target was framed — likely VULNERABLE',
+        'The page rendered inside the iframe, so framing is not blocked. ' +
+        'Confirm the overlaid control maps to a real sensitive action, then capture a screenshot as evidence.');
+    };
+
+    frame.src = url;
+
+    setTimeout(() => {
+      if (!loaded) {
+        setStatus('safe', 'Frame did not render — likely PROTECTED',
+          'The browser appears to have blocked framing (check the console for an X-Frame-Options / CSP ' +
+          'frame-ancestors refusal). Verify with: curl -I ' + url);
+      }
+    }, 4000);
+  });
+</script>
+</body>
+</html>
